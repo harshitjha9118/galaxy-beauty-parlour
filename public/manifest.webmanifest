@@ -1,0 +1,9 @@
+{
+  "name": "Galaxy Beauty Parlour",
+  "short_name": "Galaxy Beauty",
+  "start_url": "/admin",
+  "display": "standalone",
+  "background_color": "#160d13",
+  "theme_color": "#4b1832",
+  "icons": []
+}
