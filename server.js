@@ -84,7 +84,7 @@ const upload = multer({
 });
 
 let ADMIN_HASH;
-const vapidReady = Boolean(process.env.VAPID_PUBLIC_KEY && process.env.VAPID_PRIVATE_KEY);
+let vapidReady = Boolean(process.env.VAPID_PUBLIC_KEY && process.env.VAPID_PRIVATE_KEY);
 if (vapidReady) {
   webpush.setVapidDetails(process.env.VAPID_SUBJECT || "mailto:owner@example.com",
     process.env.VAPID_PUBLIC_KEY, process.env.VAPID_PRIVATE_KEY);
@@ -258,7 +258,24 @@ app.patch("/api/admin/services/:id", requireOwner, requireCsrf, mutationLimiter,
 });
 
 app.get("/api/admin/push/status", requireOwner, (_req, res) => {
-  res.json({ configured: vapidReady, message: vapidReady ? "Push notifications configured." : "VAPID keys are not configured yet." });
+  res.json({ configured: vapidReady, message: vapidReady ? "Push notifications ready." : "Notification setup needed." });
+});
+
+// Owner-triggered one-time setup: generate and store VAPID keys in PostgreSQL.
+app.post("/api/admin/push/setup", requireOwner, requireCsrf, mutationLimiter, async (_req, res, next) => {
+  try {
+    const saved = await pool.query("SELECT value FROM app_settings WHERE key='vapid_keys'");
+    let keys = saved.rows[0]?.value;
+    if (!keys) {
+      keys = webpush.generateVAPIDKeys();
+      await pool.query("INSERT INTO app_settings(key,value) VALUES('vapid_keys',$1::jsonb) ON CONFLICT(key) DO NOTHING", [JSON.stringify(keys)]);
+      const again = await pool.query("SELECT value FROM app_settings WHERE key='vapid_keys'");
+      keys = again.rows[0].value;
+    }
+    webpush.setVapidDetails(process.env.VAPID_SUBJECT || "mailto:owner@example.com", keys.publicKey, keys.privateKey);
+    vapidReady = true;
+    res.json({ configured: true, publicKey: keys.publicKey });
+  } catch (e) { next(e); }
 });
 
 app.post("/api/admin/push/subscribe", requireOwner, requireCsrf, async (req, res, next) => {
@@ -317,6 +334,11 @@ async function initialize() {
     );
     CREATE INDEX IF NOT EXISTS idx_bookings_date ON bookings(booking_date);
     CREATE INDEX IF NOT EXISTS idx_bookings_status ON bookings(status);
+    CREATE TABLE IF NOT EXISTS app_settings (
+      key TEXT PRIMARY KEY,
+      value JSONB NOT NULL,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
     CREATE TABLE IF NOT EXISTS push_subscriptions (
       id BIGSERIAL PRIMARY KEY,
       endpoint TEXT UNIQUE NOT NULL,
