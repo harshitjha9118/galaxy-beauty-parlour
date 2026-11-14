@@ -121,11 +121,30 @@ async function sendOwnerPush(payload) {
   }));
 }
 
-app.get("/api/public/config", (_req, res) => res.json({
+const DEFAULT_SITE_SETTINGS = {
   parlourName: "Galaxy Beauty Parlour",
-  pushEnabled: vapidReady,
-  vapidPublicKey: process.env.VAPID_PUBLIC_KEY || null
-}));
+  tagline: "BEAUTY · CARE · CONFIDENCE",
+  heroEyebrow: "A LITTLE LUXURY, JUST FOR YOU",
+  heroTitle: "Beauty is your signature.",
+  heroText: "आपकी खूबसूरती और आत्मविश्वास के लिए खास देखभाल। Skin care से लेकर bridal makeup तक — अपनी पसंद की सर्विस चुनें।",
+  phone: "",
+  whatsappNumber: "",
+  address: "",
+  openingHours: "",
+  bookingNotice: "बुकिंग अनुरोध भेजने के बाद पार्लर आपसे दिए गए मोबाइल नंबर पर संपर्क कर सकता है।",
+  instagramUrl: ""
+};
+
+async function readSiteSettings() {
+  const { rows } = await pool.query("SELECT value FROM app_settings WHERE key='site_settings'");
+  return { ...DEFAULT_SITE_SETTINGS, ...(rows[0]?.value || {}) };
+}
+
+app.get("/api/public/config", async (_req, res, next) => {
+  try {
+    res.json({ ...(await readSiteSettings()), pushEnabled: vapidReady, vapidPublicKey: process.env.VAPID_PUBLIC_KEY || null });
+  } catch (e) { next(e); }
+});
 
 app.get("/api/services", async (_req, res, next) => {
   try {
@@ -254,6 +273,34 @@ app.patch("/api/admin/services/:id", requireOwner, requireCsrf, mutationLimiter,
       [category,name,price,description,active,id]);
     if (!result.rowCount) return res.status(404).json({ error: "Service not found." });
     res.json({ message: "Service saved." });
+  } catch (e) { next(e); }
+});
+
+app.get("/api/admin/settings", requireOwner, async (_req, res, next) => {
+  try { res.json(await readSiteSettings()); } catch (e) { next(e); }
+});
+
+app.put("/api/admin/settings", requireOwner, requireCsrf, mutationLimiter, async (req, res, next) => {
+  try {
+    const allowed = Object.keys(DEFAULT_SITE_SETTINGS);
+    const settings = {};
+    for (const key of allowed) settings[key] = cleanText(req.body[key], key === "heroText" || key === "bookingNotice" ? 600 : 180);
+    if (!settings.parlourName) return res.status(400).json({ error: "Parlour name is required." });
+    for (const key of ["instagramUrl"]) {
+      if (settings[key] && !/^https:\/\//i.test(settings[key])) return res.status(400).json({ error: "Social link must start with https://" });
+    }
+    await pool.query("INSERT INTO app_settings(key,value) VALUES('site_settings',$1::jsonb) ON CONFLICT(key) DO UPDATE SET value=EXCLUDED.value,updated_at=NOW()", [JSON.stringify(settings)]);
+    res.json({ message: "Website settings saved.", settings });
+  } catch (e) { next(e); }
+});
+
+app.delete("/api/admin/services/:id", requireOwner, requireCsrf, mutationLimiter, async (req, res, next) => {
+  try {
+    const id = Number(req.params.id);
+    if (!Number.isInteger(id) || id < 1) return res.status(400).json({ error: "Invalid service." });
+    const result = await pool.query("DELETE FROM services WHERE id=$1 RETURNING id", [id]);
+    if (!result.rowCount) return res.status(404).json({ error: "Service not found." });
+    res.json({ message: "Service deleted." });
   } catch (e) { next(e); }
 });
 
