@@ -10,19 +10,48 @@ async function api(url, options={}) {
   if (!res.ok) throw new Error(data.error || "Request failed");
   return data;
 }
+
+function urlBase64ToUint8Array(base64String) {
+  const padding = "=".repeat((4 - base64String.length % 4) % 4);
+  const base64 = (base64String + padding).replace(/-/g, "+").replace(/_/g, "/");
+  const raw = atob(base64);
+  return Uint8Array.from([...raw].map(ch => ch.charCodeAt(0)));
+}
+async function enableBookingNotifications() {
+  const button = $("enablePushBtn"), message = $("pushMessage");
+  button.disabled = true; message.textContent = "Notification setup हो रहा है…";
+  try {
+    if (!("serviceWorker" in navigator) || !("PushManager" in window) || !("Notification" in window))
+      throw new Error("इस browser में Push Notification supported नहीं है। Chrome में वेबसाइट खोलें।");
+    const permission = await Notification.requestPermission();
+    if (permission !== "granted") throw new Error("Browser notification permission Allow करें।");
+    const setup = await api("/api/admin/push/setup", {method:"POST", body:JSON.stringify({})});
+    const registration = await navigator.serviceWorker.register("/sw.js");
+    await navigator.serviceWorker.ready;
+    let subscription = await registration.pushManager.getSubscription();
+    if (!subscription) subscription = await registration.pushManager.subscribe({userVisibleOnly:true, applicationServerKey:urlBase64ToUint8Array(setup.publicKey)});
+    await api("/api/admin/push/subscribe", {method:"POST", body:JSON.stringify(subscription)});
+    message.textContent = "✅ इस मोबाइल पर नई Booking की notification चालू हो गई है।";
+  } catch (err) {
+    message.textContent = "❌ " + err.message;
+    button.disabled = false;
+  }
+}
+
 async function init() {
   const d = await api("/api/admin/csrf");
   csrfToken = d.csrfToken;
   if (d.loggedIn) showDashboard();
 }
 function showLogin() { loginSection.hidden=false; dashboard.hidden=true; }
-function showDashboard() { loginSection.hidden=true; dashboard.hidden=false; refreshAll(); }
+function showDashboard() { loginSection.hidden=true; dashboard.hidden=false; $("enablePushBtn").disabled=false; refreshAll(); }
 $("loginForm").addEventListener("submit", async e => {
   e.preventDefault(); $("loginMessage").textContent="Logging in…";
   const body=Object.fromEntries(new FormData(e.currentTarget).entries());
   try { const d=await api("/api/admin/login",{method:"POST",body:JSON.stringify(body)}); csrfToken=d.csrfToken; showDashboard(); }
   catch(err){$("loginMessage").textContent=err.message;}
 });
+$("enablePushBtn").addEventListener("click", enableBookingNotifications);
 $("logoutBtn").addEventListener("click", async()=>{try{await api("/api/admin/logout",{method:"POST"});csrfToken="";showLogin();}catch(e){$("adminMessage").textContent=e.message;}});
 async function refreshAll(){await Promise.all([loadSummary(),loadBookings(),loadServices()]);}
 async function loadSummary(){const d=await api("/api/admin/summary");$("totalCount").textContent=d.counts.total||0;$("pendingCount").textContent=d.counts.pending||0;$("confirmedCount").textContent=d.counts.confirmed||0;$("completedCount").textContent=d.counts.completed||0;}

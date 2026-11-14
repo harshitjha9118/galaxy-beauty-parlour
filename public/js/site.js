@@ -35,3 +35,5 @@ form.addEventListener("submit", async e => {
   } catch(err) { msg.textContent = err.message; }
 });
 loadServices();
+
+if ("serviceWorker" in navigator) { window.addEventListener("load", () => navigator.serviceWorker.register("/sw.js").catch(() => {})); }
